@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.ilkaydnc.panorama",
+  "name": "Panorama",
+  "version": "1.0.18",
+  "author": "Ilkay Dinc",
+  "license": "MIT",
+  "description": "Every workspace in one wide view. Double-tap Super and the desktop pulls back into a strip of live workspace feeds; walk the strip, pick a window, and Enter zooms back in on the frame the desktop is already drawing. Borrows the shell's picker colours, so it sits in any theme.",
+  "kinds": [
+    "service"
+  ],
+  "entryPoints": {
+    "service": "1.0.18/Panorama.qml"
+  }
+}
