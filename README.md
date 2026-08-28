@@ -33,7 +33,10 @@ wants more can dress it. See [theming](#theming).
 
 - Omarchy 4 (the Quattro shell). This is a shell plugin, not a standalone app.
 - Hyprland, which Omarchy already runs. The feeds are wlroots screencopy
-  captures, so windows on hidden workspaces show real pixels, live.
+  captures, so windows on hidden workspaces show real pixels, live. Omarchy 4
+  configures Hyprland in Lua, and that is how Panorama registers its own key. On
+  a legacy `hyprland.conf` setup it registers nothing and you add the bind
+  yourself.
 - Nothing else. No daemon, no package, no network. Panorama writes no files at
   all. It reads its settings from its own entry in `shell.json` and asks
   `hyprctl` what your workspaces look like.
@@ -44,27 +47,37 @@ wants more can dress it. See [theming](#theming).
 omarchy plugin add https://github.com/ilkaydnc/omarchy-panorama.git --enable
 ```
 
-Then give it a key. Panorama claims none and touches nothing in
-`~/.config/hypr`, so the bind is yours to add. The one it was built around is a
-double-tap of Super, which means a release bind on the Super key itself. Add
-this to `~/.config/hypr/bindings.lua`:
+That is the whole install. Panorama claims its own key as it loads, a
+double-tap of Super, and nothing under `~/.config/hypr` is read or written to do
+it. The bind is registered in the running session through `hyprctl eval`, the
+same `hl.bind` call Omarchy's own bind helper makes.
+
+Two taps inside `doubleTap` ms, 300 by default, open it. A single tap does
+nothing at all. Any tap while it is open closes it. Hyprland shadows a release
+bind on Super after a `SUPER+key` combo, so your ordinary shortcuts never trip
+it.
+
+A key that is already bound wins. Panorama looks first and takes nothing if
+something is there, yours or anyone else's, so the line you added by hand keeps
+working and you stay the one who decides. Two dispatchers on one tap would count
+every tap twice and open on a single one.
+
+For another key, set `bind` (see [settings](#settings)). A bare modifier gets a
+release bind and the double-tap detector. Anything else is an ordinary press
+that toggles, and note that `SUPER+TAB` is already Omarchy's next-workspace:
+
+```json
+{ "id": "io.github.ilkaydnc.panorama", "bind": "SUPER + GRAVE" }
+```
+
+`"bind": false` claims nothing, if you would rather keep every bind in one file:
 
 ```lua
--- Panorama: double-tap Super pulls back to every workspace
 o.bind("SUPER + SUPER_L", "Panorama", "omarchy-shell panorama tap", { release = true })
 ```
 
-`tap` is the double-tap detector. Two taps inside `doubleTap` ms, 300 by
-default, open it. A single tap does nothing at all. Any tap while it is open
-closes it. Hyprland shadows a release bind on Super after a `SUPER+key` combo,
-so your ordinary shortcuts never trip it.
-
-For a plain combo, bind `toggle` instead. Note that `SUPER+TAB` is already
-Omarchy's next-workspace:
-
-```lua
-o.bind("SUPER + GRAVE", "Panorama", "omarchy-shell panorama toggle")
-```
+Because the bind is a runtime one, `hyprctl binds` and `omarchy menu
+keybindings` list it under the dispatcher `__lua`, described as Panorama.
 
 ## Keys
 
@@ -138,6 +151,7 @@ is no separate config file:
 
 | Key | Default | Range | What |
 | --- | --- | --- | --- |
+| `bind` | `"SUPER + SUPER_L"` | a key spec, or `false` | The key Panorama claims as it loads. A key already bound wins. `false` claims none. |
 | `zoom` | `340` | 0–800 ms | Length of the zoom. `0` cuts. |
 | `zoomEase` | `[0.45, 0, 0.15, 1]` | four numbers | Cubic-bezier of the zoom. |
 | `feed` | `30` | 18–45 | Width of the selected feed, as a percent of the screen. |
@@ -204,8 +218,9 @@ omarchy plugin remove io.github.ilkaydnc.panorama
 
 That deletes the plugin folder and its own entry in
 `~/.config/omarchy/shell.json`, the only place outside the folder that knows
-about it. Your bind in `~/.config/hypr/bindings.lua` is yours. Panorama never
-put it there, so take that line out yourself.
+about it. The key goes too: the bind lives in the session, and Panorama drops it
+as the plugin unloads. If you bound a key by hand, that line is yours to take
+out.
 
 ## How it works
 
@@ -226,6 +241,13 @@ and the switch follows a beat later, 24 ms.
 **Nothing the compositor reports gets acted on mid-commit.** A refresh landing
 inside the zoom would rebuild the very feed being blown up and restart the
 captures inside it.
+
+**Nothing under `~/.config/hypr` is touched.** Hyprland 0.56 parses binds with
+its Lua provider, which refuses `hyprctl keyword bind` outright, so the key goes
+in through `hyprctl eval`. What comes out of `shell.json` is checked against key
+names and pluses before it reaches a Lua interpreter. A session bind dies on a
+config reload, which is why the reload event puts it back, and it dies with the
+plugin, which is why removing Panorama leaves no key behind.
 
 **The version directory is deliberate.** The shell caches compiled QML
 components per process, so a release ships as a new `<version>/` folder with the

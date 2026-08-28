@@ -89,12 +89,13 @@ import qs.Commons
 // held after the zoom, 0 = none), thumbnails (live | static | off),
 // minimum (5), maximum (10 — the strip ends with one empty slot to walk into, inside this cap),
 // icons (dock rows, 8), rows (record, 4), doubleTap (ms, 300), field (density 0–3, 1; 0 = off),
-// bar (hidden | shown, hidden).
+// bar (hidden | shown, hidden), bind ("SUPER + SUPER_L"; false = claim no key at all).
 //
 // IPC:  omarchy-shell panorama toggle | open | close | openWith "<query>" | enter | tap | state
 // `tap` is for a release bind on the Super key itself: two taps within `doubleTap` ms open, a
-// single tap does nothing, any tap while open closes. Bind it yourself; nothing in ~/.config/hypr
-// is touched by this plugin.
+// single tap does nothing, any tap while open closes. Panorama registers that bind itself, at
+// runtime, through `hyprctl eval` (see "bind" below) — nothing in ~/.config/hypr is ever written
+// or read by this plugin, and a bind already sitting on the key is left alone.
 Item {
   id: root
 
@@ -631,6 +632,10 @@ Item {
     target: Hyprland
     function onRawEvent(ev) {
       var name = String(ev.name || "")
+      // A reload wipes every bind in the session, ours included, and Omarchy
+      // reloads Hyprland whenever the theme changes. Give the config's own
+      // binds a beat to land before looking at the key again.
+      if (name === "configreloaded") { root.bound = false; bindRetry.restart(); return }
       if (!root.open) return
       // Mid-commit a refresh would re-sort the workspace and rebuild the feed being blown up to full
       // screen, restarting every capture inside it: the next open takes a fresh snapshot anyway.
@@ -644,6 +649,128 @@ Item {
     }
   }
   Timer { id: refreshDebounce; interval: 60; onTriggered: { root.refreshUrgent(); root.refresh() } }
+
+  // ------------------------------------------------------------------- bind
+  // Panorama claims its own key, so installing it is one command and no file
+  // edit. Hyprland 0.56 parses binds through its Lua config provider, which
+  // refuses `hyprctl keyword bind` outright ("keyword can't work with
+  // non-legacy parsers. Use eval."), so the bind goes in through `hyprctl eval`
+  // and the very same hl.bind call Omarchy's own o.bind helper makes
+  // (default/hypr/helpers.lua). It is session state, not config: nothing is
+  // written to disk, a config reload drops it, and the reload event puts it
+  // back. `hyprctl binds` reports it under the dispatcher `__lua`, which is
+  // where it shows up in `omarchy menu keybindings`.
+  //
+  // A bind already on the key wins. Anyone who added the line to bindings.lua
+  // by hand would otherwise get two dispatchers on one tap, and the double-tap
+  // detector would count every tap twice and open on a single one.
+  //
+  // A bare modifier can only fire on release, and a release of Super is the
+  // double-tap gesture, so that key gets `tap`. Any other key is an ordinary
+  // press, and presses `toggle`.
+  readonly property string bindSpec: {
+    var v = setting("bind", "SUPER + SUPER_L")
+    if (v === false || v === 0) return ""
+    if (v === true) return "SUPER + SUPER_L"
+    var t = String(v).trim()
+    return (t === "" || t.toLowerCase() === "false" || t.toLowerCase() === "off" || t.toLowerCase() === "none") ? "" : t
+  }
+  // Key names and pluses, nothing else: what comes out of shell.json reaches a
+  // Lua interpreter, and it may only ever arrive there as a bind spec.
+  readonly property bool bindSane: /^[A-Za-z0-9_]+([ \t]*\+[ \t]*[A-Za-z0-9_]+)*$/.test(bindSpec)
+  readonly property var bindParts: bindSane ? bindSpec.split("+").map(function (x) { return x.trim().toUpperCase() }) : []
+  readonly property string bindKey: bindParts.length ? bindParts[bindParts.length - 1] : ""
+  readonly property bool bindRelease: ["SUPER_L", "SUPER_R", "ALT_L", "ALT_R", "CTRL_L", "CTRL_R",
+    "CONTROL_L", "CONTROL_R", "SHIFT_L", "SHIFT_R"].indexOf(bindKey) !== -1
+  // Hyprland's own modifier bits, as reported by `hyprctl -j binds`.
+  readonly property int bindMask: {
+    var bits = { "SHIFT": 1, "CAPS": 2, "CTRL": 4, "CONTROL": 4, "ALT": 8, "MOD2": 16, "MOD3": 32,
+                 "SUPER": 64, "MOD4": 64, "MOD5": 128 }
+    var m = 0
+    for (var i = 0; i < bindParts.length - 1; i++) m |= (bits[bindParts[i]] || 0)
+    return m
+  }
+  readonly property string bindLua: 'hl.bind("' + bindSpec + '", hl.dsp.exec_cmd("omarchy-shell panorama '
+    + (bindRelease ? 'tap' : 'toggle') + '"), { description = "Panorama"'
+    + (bindRelease ? ', release = true' : '') + ' })'
+  property bool bound: false
+  property string boundSpec: ""
+
+  function claimBind() {
+    if (compact || bound || bindSpec === "") return
+    if (!bindSane) { console.warn("panorama: ignoring bind setting", JSON.stringify(bindSpec)); return }
+    if (bindProbe.running || bindApply.running) { bindRetry.restart(); return }
+    bindProbe.running = true
+  }
+  // Dropping the key is fire-and-forget: on destruction the Process objects go
+  // with the component, so the unbind has to outlive it.
+  function dropBind(spec) {
+    if (!spec) return
+    bound = false
+    boundSpec = ""
+    Quickshell.execDetached(["hyprctl", "eval", 'hl.unbind("' + spec + '")'])
+  }
+  Process {
+    id: bindProbe
+    command: ["hyprctl", "-j", "binds"]
+    stdout: StdioCollector { onStreamFinished: root.applyBinds(text) }
+  }
+  Process { id: bindApply; onExited: function (code) { root.bindApplied(code) } }
+  Timer { id: bindRetry; interval: 250; onTriggered: root.claimBind() }
+  // Two more looks at the key, then done. A plugin version swap builds the new
+  // instance and tears the old one down in whichever order it likes, so the
+  // outgoing unbind can land after the incoming bind, or the incoming instance
+  // can see the outgoing one's bind, stand down, and then watch it vanish.
+  // Either way the key ends up empty, and a late look puts it back.
+  property int bindLooks: 0
+  Timer {
+    id: bindWatch
+    interval: 2500
+    repeat: true
+    onTriggered: {
+      root.bindLooks++
+      if (root.bindLooks >= 2) running = false
+      if (!bindProbe.running && !bindApply.running) bindProbe.running = true
+    }
+  }
+  function watchBind() { bindLooks = 0; bindWatch.restart() }
+
+  function applyBinds(text) {
+    if (compact || bindSpec === "" || !bindSane) return
+    var list = []
+    try { list = JSON.parse(String(text) || "[]") } catch (e) { return }
+    var found = false
+    for (var i = 0; i < list.length && !found; i++) {
+      var b = list[i]
+      found = String(b.submap || "") === "" && String(b.key || "").toUpperCase() === bindKey
+        && Number(b.modmask) === bindMask && (!!b.release) === bindRelease
+    }
+    if (bound) {                                   // a later look: ours should still be listed
+      if (!found) { bound = false; bindRetry.restart() }
+      return
+    }
+    if (found) {
+      if (bindLooks === 0) {
+        console.info("panorama:", bindSpec, "is already bound, leaving it alone")
+        watchBind()
+      }
+      return
+    }
+    bindApply.command = ["hyprctl", "eval", bindLua]
+    bindApply.running = true
+  }
+  function bindApplied(code) {
+    if (Number(code) !== 0) { console.warn("panorama: could not bind", bindSpec); return }
+    bound = true
+    boundSpec = bindSpec
+    console.info("panorama: bound", bindSpec, "to panorama", bindRelease ? "tap" : "toggle")
+    watchBind()
+  }
+  onBindSpecChanged: {
+    if (boundSpec !== "" && boundSpec !== bindSpec) dropBind(boundSpec)
+    bindRetry.restart()
+  }
+  Component.onDestruction: dropBind(boundSpec)
 
   // ------------------------------------------------------------------ query
   function computeMatches() {
@@ -1104,7 +1231,7 @@ Item {
     asynchronous: true
     cache: true
   }
-  Component.onCompleted: { indexWebapps(); refreshLook(); refresh() }
+  Component.onCompleted: { indexWebapps(); refreshLook(); refresh(); bindRetry.restart() }
 
   // Harness hooks: the loaded stage item (null while closed) and the veil's stage.
   readonly property var stageItem: content.item
