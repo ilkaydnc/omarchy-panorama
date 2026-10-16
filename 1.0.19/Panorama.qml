@@ -198,6 +198,7 @@ Item {
   readonly property var dressObj: dress          // harness hook
   function lbl(s) { return dress.upper ? String(s).toUpperCase() : String(s) }
   function num(n) { return dress.padded ? pad(n) : String(n) }
+  function workspaceLabel(id) { var ws = wsMap[id]; return ws && ws.name !== String(id) ? ws.name : num(id) }
   function windowsLabel(n) { return n ? n + " " + lbl(n === 1 ? "window" : "windows") : lbl("empty") }
   // Stills atlases come from the theme (dress.stillsPath); the field runs only once the first one has loaded.
   function atlasUrl(px) { return Util.fileUrl(dress.stillsPath + "/field-" + px + ".png") }
@@ -321,7 +322,7 @@ Item {
   property var monitor: null         // hyprctl monitor object for that screen
   property var monitors: []          // hyprctl monitors
   property var ids: []               // workspace ids shown, in strip order
-  property var wsMap: ({})           // id -> { id, addrs: [], exists, fullscreen, monitorName, elsewhere, windows }
+  property var wsMap: ({})           // id -> { id, name, selector, addrs: [], exists, fullscreen, monitorName, elsewhere, windows }
   property var clientMap: ({})       // address -> hyprctl client
   property var urgentMap: ({})       // address -> bool (from the Hyprland event model)
   property var matches: []           // [{ ws, addr }] in strip order
@@ -375,6 +376,13 @@ Item {
   }
   function css(c) { return "rgba(" + Math.round(c.r * 255) + "," + Math.round(c.g * 255) + "," + Math.round(c.b * 255) + "," + c.a + ")" }
   function normAddr(a) { return String(a || "").toLowerCase().replace(/^0x/, "") }
+  function isSpecialWorkspace(ws) { var id = Number(ws && ws.id); return id >= -99 && id <= -2 }
+  function luaString(value) {
+    return "\"" + String(value).replace(/[\\"\x00-\x1f\x7f]/g, function(ch) {
+      if (ch === "\\" || ch === "\"") return "\\" + ch
+      return "\\" + ("00" + ch.charCodeAt(0)).slice(-3)
+    }) + "\""
+  }
   function screenFor(name) {
     var list = Quickshell.screens
     for (var i = 0; i < list.length; i++) if (list[i].name === name) return list[i]
@@ -474,11 +482,14 @@ Item {
     // A special workspace on screen (the scratchpad) is stacked above the normal one, so its windows
     // belong on that workspace's feed — on top — or the copy would be missing what the screen shows.
     // They are never a slot in the strip and never a row in the list; the count stays the workspace's own.
+    var known = ({})
+    for (var w = 0; w < workspaces.length; w++) known[Number(workspaces[w].id)] = workspaces[w]
     var above = ({})            // special workspace id -> the normal workspace it covers
     for (var sm = 0; sm < mons.length; sm++) {
       var sid = mons[sm].specialWorkspace ? Number(mons[sm].specialWorkspace.id) : 0
       var saw = mons[sm].activeWorkspace ? Number(mons[sm].activeWorkspace.id) : 0
-      if (sid !== 0 && saw > 0) above[sid] = saw
+      if (sid !== 0 && saw !== 0 && !isSpecialWorkspace(mons[sm].activeWorkspace)) above[sid] = saw
+      if (saw !== 0 && !known[saw]) known[saw] = { id: saw, name: mons[sm].activeWorkspace.name, monitor: mons[sm].name }
     }
 
     // Clients: mapped, not hidden, on a real workspace (or on a special one that is showing).
@@ -488,13 +499,19 @@ Item {
       if (!c || c.mapped === false || c.hidden === true) continue
       if (!c.workspace) continue
       var cw = Number(c.workspace.id)
-      if (!(cw > 0)) {
+      if (!cw) continue
+      if (isSpecialWorkspace(c.workspace)) {
         var onto = above[cw]
         if (!onto) continue                 // a special workspace that isn't on screen
         cmap[normAddr(c.address)] = c
         if (!byAbove[onto]) byAbove[onto] = []
         byAbove[onto].push(c)
         continue
+      }
+      if (!known[cw]) {
+        var clientMon = monitor ? monitor.name : ""
+        for (var cm = 0; cm < mons.length; cm++) if (mons[cm].id === c.monitor) clientMon = mons[cm].name
+        known[cw] = { id: cw, name: c.workspace.name, monitor: clientMon }
       }
       cmap[normAddr(c.address)] = c
       if (!byWs[cw]) byWs[cw] = []
@@ -510,8 +527,25 @@ Item {
     // exactly as it does for one that was never opened. `maximum` still caps the strip.
     var highest = 0
     for (var wk in byWs) highest = Math.max(highest, Number(wk))
-    for (var w = 0; w < workspaces.length; w++) if (workspaces[w].id > 0 && workspaces[w].id <= maximum) highest = Math.max(highest, workspaces[w].id)
+    for (var wi = 0; wi < workspaces.length; wi++) if (workspaces[wi].id > 0 && workspaces[wi].id <= maximum) highest = Math.max(highest, workspaces[wi].id)
     var hi = Math.max(minimum, Math.min(maximum, highest + 1))
+    var named = [], required = ({})
+    for (var ki in known) if (Number(ki) < 0 && !isSpecialWorkspace(known[ki])) named.push(Number(ki))
+    named.sort(function(a, b) { return b - a })
+    if (named.length) {
+      for (var rk in byWs) if (Number(rk) > 0) required[rk] = true
+      for (var rm = 0; rm < mons.length; rm++) {
+        var activeId = mons[rm].activeWorkspace ? Number(mons[rm].activeWorkspace.id) : 0
+        if (activeId > 0) required[activeId] = true
+      }
+      hi = Math.max(0, Math.min(maximum - named.length, Math.max(minimum - named.length, highest + 1)))
+      while (hi > 0) {
+        var overflow = 0
+        for (var rid in required) if (Number(rid) > hi) overflow++
+        if (named.length + hi + overflow <= maximum) break
+        hi--
+      }
+    }
     var list = []
     for (var n = 1; n <= hi; n++) list.push(n)
     var extra = []
@@ -523,7 +557,12 @@ Item {
       if (aw > hi && extra.indexOf(aw) === -1) extra.push(aw)
     }
     extra.sort(function(a, b) { return a - b })
-    list = list.concat(extra)
+    list = named.concat(list, extra)
+    if (named.length && list.length && byWs[list[list.length - 1]]) {
+      for (var empty = list.length - 1; empty >= named.length; empty--) {
+        if (!byWs[list[empty]]) { list.push(list.splice(empty, 1)[0]); break }
+      }
+    }
 
     var map = ({})
     for (var li = 0; li < list.length; li++) {
@@ -541,11 +580,13 @@ Item {
       // Which window holds the focus on this workspace — the scratchpad above it counted in.
       var focusList = cl.concat(ab)
       focusList.sort(function(a, b) { return (a.focusHistoryID || 0) - (b.focusHistoryID || 0) })
-      var wsObj = null
-      for (var wi = 0; wi < workspaces.length; wi++) if (workspaces[wi].id === id) wsObj = workspaces[wi]
+      var wsObj = known[id]
       var monName = wsObj ? String(wsObj.monitor || "") : (monitor ? monitor.name : "")
+      var name = wsObj && wsObj.name !== undefined ? String(wsObj.name) : String(id)
       map[id] = {
         id: id,
+        name: name,
+        selector: id < 0 ? "name:" + name : String(id),
         addrs: addrs,
         above: aboveAddrs,                                                   // drawn on top of this feed, never listed
         focusAddr: focusList.length ? normAddr(focusList[0].address) : "",
@@ -1035,7 +1076,7 @@ Item {
     var what = client
       ? lbl(appName(client["class"])) + " · " + String(client.title || "")
       : windowsLabel(ws ? ws.windows : 0)
-    cardSub = "→ " + num(wsId) + " · " + what + (ws && ws.monitorName ? " · " + ws.monitorName : (monitor ? " · " + monitor.name : ""))
+    cardSub = "→ " + workspaceLabel(wsId) + " · " + what + (ws && ws.monitorName ? " · " + ws.monitorName : (monitor ? " · " + monitor.name : ""))
     locked = true
     committing = true            // drops the layer's exclusive keyboard focus right now
     // Only zoom out of a frame that is already a copy: before the reveal the captures have no pixels, so
@@ -1045,8 +1086,8 @@ Item {
     pendingAddr = addr ? String(addr) : ""
     if (ws && wsId !== sel) { sel = wsId; rowIdx = -1 }   // digit keys and feed clicks: the reticle pans there inside the zoom
     pendingLua = client
-      ? "hl.dsp.focus({ window = \"address:" + String(client.address) + "\" })"
-      : "hl.dsp.focus({ workspace = \"" + wsId + "\" })"
+      ? "hl.dsp.focus({ window = " + luaString("address:" + String(client.address)) + " })"
+      : "hl.dsp.focus({ workspace = " + luaString(ws ? ws.selector : String(wsId)) + " })"
     dispatchTimer.interval = dispatchDelayMs
     dispatchTimer.restart()
     if (zoomIt) startZoom(0)
@@ -2073,7 +2114,7 @@ Item {
                   opacity: root.decorAlpha * feed.presence
                   x: Style.space(7); y: Style.space(4)
                   spacing: Style.space(7)
-                  Text { text: root.num(feed.modelData); color: feed.selected ? stage.fg : stage.muted; font.family: stage.family; font.pixelSize: Style.font.caption; font.letterSpacing: stage.track(1.6) }
+                  Text { text: root.workspaceLabel(feed.modelData); textFormat: Text.PlainText; color: feed.selected ? stage.fg : stage.muted; font.family: stage.family; font.pixelSize: Style.font.caption; font.letterSpacing: stage.track(1.6) }
                   // The live workspace: the bar's own focused-workspace glyph in the focus colour (a word under readouts).
                   Text { visible: feed.isLive; text: dress.readouts ? root.lbl("live") : "\uDB85\uDCFB"; color: dress.readouts ? stage.muted : stage.accent; font.family: stage.family; font.pixelSize: Style.font.caption; font.letterSpacing: stage.track(1.6); anchors.verticalCenter: parent.verticalCenter }
                   Text { visible: feed.ws && feed.ws.fullscreen; text: root.lbl("fullscreen"); color: stage.muted; font.family: stage.family; font.pixelSize: Style.font.caption; font.letterSpacing: stage.track(1.6) }
@@ -2302,7 +2343,7 @@ Item {
                 width: parent.width - x - countTxt.implicitWidth - Style.space(12)
                 elide: Text.ElideRight
                 textFormat: Text.StyledText
-                text: "<font color=\"" + stage.fg + "\">" + root.lbl("workspace") + " " + root.num(root.sel) + "</font>"
+                text: "<font color=\"" + stage.fg + "\">" + root.lbl("workspace") + " " + root.escapeHtml(root.workspaceLabel(root.sel)) + "</font>"
                     + (record.isLive ? " · " + root.lbl("live") : "")
                     + (record.ws && record.ws.elsewhere ? " · " + record.ws.monitorName : "")
                 color: stage.muted; font.family: stage.family; font.pixelSize: stage.recordPx; font.letterSpacing: stage.track(1.6)

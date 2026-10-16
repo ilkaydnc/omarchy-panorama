@@ -66,6 +66,25 @@ test('visible scratchpads cover named feeds without rows or counts, hidden scrat
   assert.ok(!h.ids.includes(-99) && !h.ids.includes(-98) && !h.ids.includes(-97))
 })
 
+test('workspace IDs distinguish ordinary special names from renamed scratchpads', () => {
+  const h = harness({ opening: true })
+  h.snapshot([
+    client(-1337, 'special', '0xa'), client(-1338, 'special:Code', '0xb'),
+    client(-99, 'Renamed scratchpad', '0xc'), client(-2, 'Hidden scratchpad', '0xd')
+  ], [workspace(-1337, 'special'), workspace(-1338, 'special:Code'), workspace(-99, 'Renamed scratchpad'), workspace(-2, 'Hidden scratchpad')],
+  [monitor(-1337, 'special', { id: -99, name: 'Renamed scratchpad' })])
+  assert.deepEqual(plain(h.ids), [-1337, -1338, 1, 2, 3])
+  assert.equal(h.sel, -1337)
+  assert.deepEqual(plain(h.wsMap[-1337].addrs), ['a'])
+  assert.deepEqual(plain(h.wsMap[-1337].above), ['c'])
+  assert.equal(h.wsMap[-1337].windows, 1)
+  assert.deepEqual(plain(h.wsMap[-1338].addrs), ['b'])
+  assert.equal(h.wsMap[-1338].selector, 'name:special:Code')
+  assert.equal(h.clientMap.d, undefined)
+  h.commit(-1337, '')
+  assert.equal(h.pendingLua, 'hl.dsp.focus({ workspace = "name:special" })')
+})
+
 test('numbered strips retain contiguous slots, cap, occupied overflow and active empty overflow', () => {
   const h = harness({ maximum: 5, minimum: 3 })
   h.snapshot([client(2, '2', '0xa'), client(12, '12', '0xb')], [workspace(2), workspace(19)], [monitor(20)])
@@ -80,6 +99,8 @@ test('mixed strips keep named feeds and numbered destinations without exceeding 
   assert.deepEqual(plain(h.ids), [-1337, -1338, 1, 2, 3])
   h.snapshot([], Array.from({ length: 6 }, (_, i) => workspace(-1337 - i, 'Name' + i)), [monitor(-1337, 'Name0')])
   assert.deepEqual(plain(h.ids), [-1337, -1338, -1339, -1340, -1341, -1342])
+  h.snapshot([client(12, '12', '0xa')], [workspace(-1337, 'Code')], [monitor(-1337, 'Code')])
+  assert.deepEqual(plain(h.ids), [-1337, 1, 2, 12, 3])
 })
 
 test('refresh keeps feed identity and named selection while updating window titles', () => {
@@ -118,23 +139,46 @@ test('feed, record and commit receipt display workspace names and escape rich te
   h.feed = { modelData: -1337 }
   h.stage = { fg: '#fff' }
   h.record = { isLive: false, ws: h.wsMap[-1337] }
-  const feedText = qml.match(/Text \{ text: ([^;]+); color: feed.selected/)[1]
+  const feedText = qml.match(/Text \{ text: ([^;]+);[^\n]*color: feed.selected/)[1]
+  assert.match(qml.match(/Text \{ text: [^\n]*color: feed.selected/)[0], /textFormat: Text.PlainText/)
   const heading = qml.match(/text: ("<font color=[^\n]+)\n\s*\+ \(record.isLive[^\n]+\n\s*\+ \(record.ws[^\n]+/)[0].slice(6)
   assert.equal(vm.runInContext(feedText, h), 'Code<&>')
   assert.match(vm.runInContext(heading, h), /Code&lt;&amp;&gt;/)
   h.commit(-1337, '')
   assert.ok(h.cardSub.startsWith('→ Code<&> · '))
+  const numbered = harness({ dress: { padded: true, upper: false } })
+  numbered.snapshot([], [workspace(2, 'Work')], [monitor(2, 'Work')])
+  assert.equal(numbered.workspaceLabel(2), 'Work')
+  assert.equal(numbered.workspaceLabel(1), '01')
+  numbered.commit(2, '')
+  assert.equal(numbered.pendingLua, 'hl.dsp.focus({ workspace = "2" })')
 })
 
-test('named dispatch preserves quotes, backslashes, Unicode and every control byte in Lua', () => {
+function quotedDispatch() {
   const name = 'Code " \\ café ' + Array.from({ length: 32 }, (_, i) => String.fromCharCode(i)).join('') + '\x7f9'
   const h = harness()
   h.snapshot([], [workspace(-1337, name)], [monitor(-1337, name)])
   h.commit(-1337, '')
-  const lua = 'hl = {dsp = {focus = function(v) io.write(v.workspace) end}}\n' + h.pendingLua
-  assert.equal(execFileSync('lua', ['-'], { input: lua, encoding: 'utf8' }), 'name:' + name)
+  return { name, lua: h.pendingLua }
+}
+
+test('named dispatch quotes backslashes, Unicode and every control byte for Lua', () => {
+  assert.equal(quotedDispatch().lua, String.raw`hl.dsp.focus({ workspace = "name:Code \" \\ café \000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031\1279" })`)
   const numbered = harness()
   numbered.snapshot([], [workspace(2)], [monitor(2)])
   numbered.commit(2, '')
   assert.equal(numbered.pendingLua, 'hl.dsp.focus({ workspace = "2" })')
+})
+
+test('Lua round-trips the dispatched name when an interpreter is available', t => {
+  const { name, lua } = quotedDispatch()
+  try {
+    assert.equal(execFileSync('lua', ['-'], {
+      input: 'hl = {dsp = {focus = function(v) io.write(v.workspace) end}}\n' + lua,
+      encoding: 'utf8'
+    }), 'name:' + name)
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+    t.skip('lua is not installed; the exact dispatch source is checked above')
+  }
 })

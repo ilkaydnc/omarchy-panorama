@@ -103,9 +103,17 @@ takes the date's line under the clock, at the date's size, and the clock never
 moves or leaves. Workspaces holding no match fall back, rows that miss fade,
 and the matches carry the accent inside their titles.
 
-The strip always ends with exactly one empty workspace, somewhere to go when
-every workspace you have is taken. Arriving there creates nothing. Hyprland
-makes it real when you cut into it, the same way `SUPER+1..9` does.
+The strip includes an empty numbered destination when `maximum` leaves room.
+Arriving there creates nothing. Hyprland makes it real when you cut into it,
+the same way `SUPER+1..9` does.
+
+Named workspaces appear first in creation order, including empty persistent
+workspaces, and count toward `minimum`. Numbered slots fill the remaining room,
+with an empty destination at the end when possible. Real named workspaces,
+occupied numbered workspaces, and each monitor's active workspace stay visible
+even beyond `maximum`. On a numbered-only desktop, the strip keeps its
+contiguous numeric order. Names appear on feeds and receipts. Digit keys still
+select numbered workspace IDs.
 
 ## The zoom
 
@@ -260,6 +268,15 @@ Built and used on a single 2560×1440 monitor at scale 1. On more than one
 monitor it opens on the focused one, which is the intent, but I have no second
 monitor to prove it. Fractional scaling is untested for the same reason. Reports
 welcome.
+
+## Tests
+
+Run `node --test tests/workspaces.test.mjs` with Node.js 20 or newer. The tests
+execute methods and label bindings extracted from `Panorama.qml`, with shell,
+monitor, and timer dependencies stubbed. No packages or display server are
+needed. If `lua` is installed, an additional test evaluates the generated focus
+command to check that workspace names survive Lua string parsing. This does not
+verify rendered captures or live Hyprland focus changes.
 
 ## License
 
