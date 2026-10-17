@@ -7,6 +7,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Hyprland
 import qs.Commons
+import qs.Commons as Commons
 
 // Panorama — every workspace in one wide view.
 //
@@ -54,8 +55,9 @@ import qs.Commons
 // would rebuild the very feed being blown up and restart the captures inside it.
 //
 // Look. Panorama has no look of its own. Out of the box it wears the shell's own picker surface —
-// the [image-picker] tokens (scrim, selected-border, unselected-border, text) over the wallpaper,
-// blurred the way the lock screen blurs it and laid a shade deeper, the [menu] selected fill for the cursor
+// the [image-picker] tokens (scrim, selected-border, unselected-border, text; a theme that sets no scrim —
+// Omarchy's generated ones stopped when the picker lost its backdrop — gets its background at half) over the
+// wallpaper, blurred the way the lock screen blurs it and laid a shade deeper, the [menu] selected fill for the cursor
 // row, corners from the theme's radius, type and spacing from the shell, app icons from the icon theme by
 // way of the launcher's lookup — so it sits in any Omarchy theme like a first-party overlay. The chrome is
 // the clock and the strip: the clock is a hero on the strip's axis, centred in the band above the feeds,
@@ -90,6 +92,8 @@ import qs.Commons
 // minimum (5), maximum (10 — the strip ends with one empty slot to walk into, inside this cap),
 // icons (dock rows, 8), rows (record, 4), doubleTap (ms, 300), field (density 0–3, 1; 0 = off),
 // bar (hidden | shown, hidden), bind ("SUPER + SUPER_L"; false = claim no key at all).
+// Panorama reads that entry from ~/.config/omarchy/shell.json itself, the way the shell does, and
+// follows edits live (see "settings" below): an installed plugin is never handed the shell's config.
 //
 // IPC:  omarchy-shell panorama toggle | open | close | openWith "<query>" | enter | tap | state
 // `tap` is for a release bind on the Super key itself: two taps within `doubleTap` ms open, a
@@ -110,9 +114,66 @@ Item {
 
   // ---------------------------------------------------------------- settings
   // Third-party services keep their settings on their plugins[] entry in
-  // shell.json, exactly like the lock-explorer plugin does.
+  // shell.json, exactly like the lock-explorer plugin does. Reading them back
+  // is the catch: only a first-party plugin is handed the shell itself. An
+  // installed one gets a PluginShellApi (shell.qml's pluginShellFor →
+  // createScopedPluginShell) carrying barConfig, idleConfig and a write-only
+  // updateEntryInline, and no shellConfig at all — on 4.0.4, and still on
+  // quattro in October 2026. Read through `shell`, every setting quietly stood
+  // at its default, `bind: false` included (#1).
+  //
+  // So Panorama reads the file itself, the same file the same way the shell
+  // does (applyShellConfig): ~/.config/omarchy/shell.json when it parses to an
+  // object with version: 1; anything else there — missing, empty, broken,
+  // another version — and the shell runs on $OMARCHY_PATH/config/omarchy/
+  // shell.json under the same rule, so Panorama does too; neither, and every
+  // setting is its default. Both files are read as the plugin loads (so the
+  // first claimBind already sees the right key) and watched after: a load
+  // replaces the parsed copy wholesale, every setting below is a binding on
+  // `config`, and an edit lands live — the key moves with onBindSpecChanged.
+  // A shell that does hand over its shellConfig (first-party, a dev load, a
+  // harness) still wins: that copy is the one the shell itself acts on.
+  readonly property string userConfigPath: (Quickshell.env("HOME") || "") + "/.config/omarchy/shell.json"
+  readonly property string defaultsPath: (Quickshell.env("OMARCHY_PATH") || "") + "/config/omarchy/shell.json"
+  // Read synchronously at load (the FileViews block), then kept current by their load handlers —
+  // Omarchy's own pattern for a watched file (Commons.Color.qml, AudioNodes.qml): a binding on text() that the
+  // handlers also feed loops on every start.
+  property var userConfig: parseConfig(userConfigFile.text())
+  property var defaultsConfig: parseConfig(defaultsFile.text())
+  readonly property var config: shell && Util.isPlainObject(shell.shellConfig) ? shell.shellConfig : (userConfig || defaultsConfig)
+  FileView {
+    id: userConfigFile
+    path: root.userConfigPath
+    blockLoading: true
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.userConfig = root.parseConfig(text())
+    onLoadFailed: root.userConfig = null
+    onFileChanged: reload()
+  }
+  FileView {
+    id: defaultsFile
+    path: root.defaultsPath
+    blockLoading: true
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.defaultsConfig = root.parseConfig(text())
+    onLoadFailed: root.defaultsConfig = null
+    onFileChanged: reload()
+  }
+  // The shell's rule, to the letter: a plain object with version: 1, or nothing. No deep merge.
+  function parseConfig(raw) {
+    var text = String(raw || "")
+    if (!text.trim()) return null
+    try {
+      var parsed = JSON.parse(text)
+      return Util.isPlainObject(parsed) && parsed.version === 1 ? parsed : null
+    } catch (e) {
+      return null
+    }
+  }
   function entry() {
-    var cfg = shell ? shell.shellConfig : null
+    var cfg = config
     var list = cfg && Array.isArray(cfg.plugins) ? cfg.plugins : []
     for (var i = 0; i < list.length; i++) {
       var e = list[i]
@@ -163,37 +224,41 @@ Item {
 
   // -------------------------------------------------------------------- dress
   // The theme's [panorama] section in shell.toml (see header), read through the Color singleton so it
-  // follows theme switches. Every key falls back to a theme role: with no section at all, Panorama is
+  // follows theme switches — always as Commons.Color: Qt 6.12 brings a Color type of its own into QtQuick
+  // that shadows a bare `Color`, and Omarchy asks every plugin to qualify it (the 6.11 import patch newer
+  // shells apply only papers over it). Every key falls back to a theme role: with no section at all, Panorama is
   // the theme's colours on the theme's background and nothing else.
   QtObject {
     id: dress
-    function str(k, fb) { var v = Color.pick("panorama." + k, ""); return v === "" ? fb : String(v) }
-    function col(k, fb) { return Color.flatColor(Color.pick("panorama." + k, ""), fb) }
-    function number(k, fb) { var v = Color.pick("panorama." + k, ""); var n = Number(v); return v !== "" && isFinite(n) ? n : fb }
+    function str(k, fb) { var v = Commons.Color.pick("panorama." + k, ""); return v === "" ? fb : String(v) }
+    function col(k, fb) { return Commons.Color.flatColor(Commons.Color.pick("panorama." + k, ""), fb) }
+    function number(k, fb) { var v = Commons.Color.pick("panorama." + k, ""); var n = Number(v); return v !== "" && isFinite(n) ? n : fb }
     function flag(k, fb) { var v = str(k, ""); return v === "" ? fb : /^(true|yes|on|1)$/i.test(v) }
     function oneOf(k, list, fb) { var v = str(k, fb).toLowerCase(); return list.indexOf(v) >= 0 ? v : fb }
-    function has(k) { return Color.pick("panorama." + k, "") !== "" }
+    function has(k) { return Commons.Color.pick("panorama." + k, "") !== "" }
     // Defaults borrow the shell's picker surface; any [panorama] key takes over its slot.
-    readonly property color scrim: Color.imagePicker.scrim
-    readonly property color backdrop: has("backdrop") ? col("backdrop", Color.background) : Qt.rgba(scrim.r, scrim.g, scrim.b, 1)
-    readonly property real backdropAlpha: has("backdrop-alpha") ? Color.pickAlpha("panorama.backdrop-alpha", 1.0) : Math.min(1, scrim.a + 0.15)
-    readonly property color line: has("frame") || has("frame-alpha") ? Util.alpha(col("frame", Color.foreground), Color.pickAlpha("panorama.frame-alpha", 0.30)) : Color.imagePicker.unselectedBorder
+    // The picker's scrim, composed here exactly as 4.0.4's Color.imagePicker.scrim was: on quattro the picker
+    // lost its backdrop (Omarchy #14709) and the token went with it. A theme that still sets one is honoured.
+    readonly property color scrim: Commons.Color.composed("image-picker.scrim", "image-picker.scrim-alpha", Commons.Color.background, 0.5)
+    readonly property color backdrop: has("backdrop") ? col("backdrop", Commons.Color.background) : Qt.rgba(scrim.r, scrim.g, scrim.b, 1)
+    readonly property real backdropAlpha: has("backdrop-alpha") ? Commons.Color.pickAlpha("panorama.backdrop-alpha", 1.0) : Math.min(1, scrim.a + 0.15)
+    readonly property color line: has("frame") || has("frame-alpha") ? Util.alpha(col("frame", Commons.Color.foreground), Commons.Color.pickAlpha("panorama.frame-alpha", 0.30)) : Commons.Color.imagePicker.unselectedBorder
     readonly property string frameStyle: oneOf("frame-style", ["line", "brackets", "none"], "line")
     readonly property string list: oneOf("list", ["dock", "record"], "dock")
     readonly property bool dock: list === "dock"                // the window list is rows of app icon + title
     readonly property bool glass: flag("glass", false)
     readonly property bool wires: flag("wires", false)
-    readonly property color focus: has("focus") ? col("focus", Color.accent) : Color.imagePicker.selectedBorder
-    readonly property color text: has("text") ? col("text", Color.foreground) : Color.imagePicker.text
-    readonly property color muted: col("muted", Color.muted)
-    readonly property color readout: col("readout", Color.muted)
+    readonly property color focus: has("focus") ? col("focus", Commons.Color.accent) : Commons.Color.imagePicker.selectedBorder
+    readonly property color text: has("text") ? col("text", Commons.Color.foreground) : Commons.Color.imagePicker.text
+    readonly property color muted: col("muted", Commons.Color.muted)
+    readonly property color readout: col("readout", Commons.Color.muted)
     readonly property bool readouts: flag("readouts", false)
     readonly property bool upper: oneOf("case", ["normal", "upper"], "normal") === "upper"
     readonly property bool padded: oneOf("numbers", ["plain", "padded"], "plain") === "padded"
     readonly property string field: oneOf("field", ["off", "wallpaper", "stills"], "wallpaper")
     readonly property real fieldBlur: Math.max(0, Math.min(1, number("field-blur", 0.8)))
     readonly property real fieldDensity: Math.max(0, Math.min(3, number("field-density", 1)))
-    readonly property string stillsPath: str("stills-path", Color.currentThemePath + "/panorama")
+    readonly property string stillsPath: str("stills-path", Commons.Color.currentThemePath + "/panorama")
   }
   readonly property var dressObj: dress          // harness hook
   function lbl(s) { return dress.upper ? String(s).toUpperCase() : String(s) }
@@ -315,8 +380,8 @@ Item {
   property var readyMap: ({})
   property string wallpaper: ""
   property int borderSize: 2
-  property color activeBorder: Color.accent      // replaced by Hyprland's general:col.* on every open
-  property color inactiveBorder: Color.muted
+  property color activeBorder: Commons.Color.accent      // replaced by Hyprland's general:col.* on every open
+  property color inactiveBorder: Commons.Color.muted
 
   property var screen: null          // Quickshell screen the overlay is on
   property var monitor: null         // hyprctl monitor object for that screen
@@ -739,7 +804,7 @@ Item {
   function claimBind() {
     if (compact || bound || bindSpec === "") return
     if (!bindSane) { console.warn("panorama: ignoring bind setting", JSON.stringify(bindSpec)); return }
-    if (bindProbe.running || bindApply.running) { bindRetry.restart(); return }
+    if (bindProbe.running || bindListing.running || bindApply.running) { bindRetry.restart(); return }
     bindProbe.running = true
   }
   // Dropping the key is fire-and-forget: on destruction the Process objects go
@@ -754,6 +819,14 @@ Item {
     id: bindProbe
     command: ["hyprctl", "-j", "binds"]
     stdout: StdioCollector { onStreamFinished: root.applyBinds(text) }
+  }
+  // Hyprland 0.56.0 wrote `hyprctl -j binds` with its values a field out of step (fixed in 0.56.1), which
+  // no JSON parser takes: the key was then never claimed, and not a word in the log. When the JSON will
+  // not parse, the plain listing — the one Omarchy's own keybindings menu reads — stands in for it.
+  Process {
+    id: bindListing
+    command: ["hyprctl", "binds"]
+    stdout: StdioCollector { onStreamFinished: root.checkBinds(root.plainBinds(text)) }
   }
   Process { id: bindApply; onExited: function (code) { root.bindApplied(code) } }
   Timer { id: bindRetry; interval: 250; onTriggered: root.claimBind() }
@@ -770,15 +843,33 @@ Item {
     onTriggered: {
       root.bindLooks++
       if (root.bindLooks >= 2) running = false
-      if (!bindProbe.running && !bindApply.running) bindProbe.running = true
+      if (!bindProbe.running && !bindListing.running && !bindApply.running) bindProbe.running = true
     }
   }
   function watchBind() { bindLooks = 0; bindWatch.restart() }
 
   function applyBinds(text) {
     if (compact || bindSpec === "" || !bindSane) return
-    var list = []
-    try { list = JSON.parse(String(text) || "[]") } catch (e) { return }
+    var list = null
+    try { list = JSON.parse(String(text) || "[]") } catch (e) { list = null }
+    if (!Array.isArray(list)) { bindListing.running = true; return }
+    checkBinds(list)
+  }
+  // `hyprctl binds` as text: a "bind" line with its flag letters (r = release), then one tab-indented
+  // "name: value" line per field — modmask, submap, key and the rest, the same names the JSON uses.
+  function plainBinds(text) {
+    var list = [], b = null
+    var lines = String(text || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var head = /^bind([a-z]*)$/.exec(lines[i])
+      if (head) { b = { release: head[1].indexOf("r") !== -1 }; list.push(b); continue }
+      var field = /^\t(\w+): ?(.*)$/.exec(lines[i])
+      if (b && field) b[field[1]] = field[2]
+    }
+    return list
+  }
+  function checkBinds(list) {
+    if (compact || bindSpec === "" || !bindSane) return
     var found = false
     for (var i = 0; i < list.length && !found; i++) {
       var b = list[i]
@@ -1485,7 +1576,7 @@ Item {
         function onFrameSwapped() { root.frameTick() }
       }
       // Keeps the scene dirty for one more frame after every tick, so the loop runs at the panel's rate.
-      Rectangle { x: root.frameSeq % 2; y: 0; width: 1; height: 1; opacity: 0.002; color: Color.background }
+      Rectangle { x: root.frameSeq % 2; y: 0; width: 1; height: 1; opacity: 0.002; color: Commons.Color.background }
 
       // Backdrop. `wallpaper` field: the current wallpaper, blurred the way the lock screen blurs it (softer),
       // composed at half resolution when blurred — the blur hides the upscale — from the shared decode. It is
@@ -1795,13 +1886,13 @@ Item {
               id: qtext
               text: queryLine.shown
               textFormat: Text.PlainText          // what a person typed, never markup
-              color: root.query.length && !root.matches.length ? Color.urgent : stage.fg
+              color: root.query.length && !root.matches.length ? Commons.Color.urgent : stage.fg
               font.family: stage.family; font.pixelSize: queryLine.px; font.letterSpacing: stage.track(1.6)
             }
             // The caret is the only thing search adds to the screen, and it stands alone until you type.
             Rectangle { width: 2; height: Math.round(queryLine.px * 1.05); color: stage.accent; anchors.verticalCenter: parent.verticalCenter }
           }
-          Rectangle { visible: dress.wires; anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 1; color: root.query.length && !root.matches.length ? Color.urgent : stage.line }
+          Rectangle { visible: dress.wires; anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 1; color: root.query.length && !root.matches.length ? Commons.Color.urgent : stage.line }
         }
         // While search is OPEN the line shows exactly what is typed, the empty string included: deleting the
         // last character really empties it, and opening search again starts blank. It keeps the last text
@@ -2058,7 +2149,7 @@ Item {
                         border.width: winItem.ring
                         border.color: winItem.focusedHere ? root.activeBorder : root.inactiveBorder
                       }
-                      Rectangle { objectName: "panorama.plate"; anchors.fill: parent; color: Color.background }
+                      Rectangle { objectName: "panorama.plate"; anchors.fill: parent; color: Commons.Color.background }
                       // Hairline on top of the capture. It used to sit under a 1 px inset, which at
                       // zoomProgress 0 (x3.33) shrank the copy by 6.7 px and resampled every glyph.
                       // The focused window shows its yellow ring instead of the hairline.
@@ -2120,7 +2211,7 @@ Item {
                   Text { visible: feed.ws && feed.ws.elsewhere; text: feed.ws ? feed.ws.monitorName : ""; color: stage.muted; font.family: stage.family; font.pixelSize: Style.font.caption; font.letterSpacing: stage.track(1.6) }
                   Rectangle {
                     visible: feed.ws && feed.ws.addrs.some(function(a) { return root.urgentMap[a] })
-                    width: Style.space(4); height: width; radius: width / 2; color: Color.urgent
+                    width: Style.space(4); height: width; radius: width / 2; color: Commons.Color.urgent
                     anchors.verticalCenter: parent.verticalCenter
                   }
                 }
@@ -2241,7 +2332,7 @@ Item {
                 opacity: 1 - (root.query.length ? 0.7 : 0.45) * tileDim.value
                 // Cursor row: the menu's selected fill, no border. The fill is the row's SLOT, so it stays
                 // where the row will be and only fades in — and the pointer's target stays with it.
-                Rectangle { anchors.fill: parent; radius: Style.cornerRadius; color: Color.menu.selectedBackground; opacity: tile.a * cursorFade.value }
+                Rectangle { anchors.fill: parent; radius: Style.cornerRadius; color: Commons.Color.menu.selectedBackground; opacity: tile.a * cursorFade.value }
                 // Everything the row is made of travels together, under one Translate: only the icon's own
                 // scale sets it apart. A transform, never the x/y bindings — moving the title's `x` would
                 // re-measure and re-elide it on every frame of the approach.
@@ -2295,7 +2386,7 @@ Item {
                       return root.query.length ? root.markup(title, root.query, String(stage.accent)) : root.escapeHtml(title)
                     }
                     // The menu's selected text on the cursor row — unless a query is up, when the match itself carries the accent.
-                    color: tile.cursor && !root.query.length ? Color.menu.selectedText : stage.fg
+                    color: tile.cursor && !root.query.length ? Commons.Color.menu.selectedText : stage.fg
                     font.family: stage.family; font.pixelSize: Style.font.title; font.letterSpacing: stage.track(1.2)
                   }
                   Text {
@@ -2304,7 +2395,7 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     textFormat: Text.StyledText
                     text: (tile.client ? root.escapeHtml(root.lbl(root.appName(tile.client["class"]))) : "")
-                        + (root.urgentMap[tile.addr] ? " <font color=\"" + Color.urgent + "\">●</font>" : "")
+                        + (root.urgentMap[tile.addr] ? " <font color=\"" + Commons.Color.urgent + "\">●</font>" : "")
                     color: stage.muted
                     font.family: stage.family; font.pixelSize: Style.font.title; font.letterSpacing: stage.track(1.2)
                   }
@@ -2395,7 +2486,7 @@ Item {
                     var head = cut >= 0 ? html.slice(0, cut) : html
                     var tail = cut >= 0 ? html.slice(cut) : ""
                     return "<font color=\"" + stage.fg + "\">" + head + "</font><font color=\"" + stage.muted + "\">" + tail + "</font>"
-                        + (root.urgentMap[row.addr] ? " <font color=\"" + Color.urgent + "\">●</font>" : "")
+                        + (root.urgentMap[row.addr] ? " <font color=\"" + Commons.Color.urgent + "\">●</font>" : "")
                   }
                   color: stage.fg; font.family: stage.family; font.pixelSize: stage.recordPx
                 }
@@ -2439,7 +2530,7 @@ Item {
             visible: root.status.length > 0
             anchors.right: parent.right; anchors.bottom: parent.bottom
             text: root.status
-            color: Color.urgent; font.family: stage.family; font.pixelSize: Style.font.caption; font.letterSpacing: stage.track(1.4)
+            color: Commons.Color.urgent; font.family: stage.family; font.pixelSize: Style.font.caption; font.letterSpacing: stage.track(1.4)
           }
         }
       }

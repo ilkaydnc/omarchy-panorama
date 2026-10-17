@@ -24,10 +24,12 @@ that also rearranges your desk is a worse viewer.
 
 It has no look of its own either. Out of the box it borrows the shell's picker
 tokens. The `[image-picker]` scrim goes over your wallpaper, blurred the way the
-lock screen blurs it. The picker's borders go on the feeds, the `[menu]`
-selected fill on the cursor row, your theme's radius on the corners, and app
-icons come from your icon theme through the launcher's own lookup. A theme that
-wants more can dress it. See [theming](#theming).
+lock screen blurs it. Where a theme sets no scrim, and Omarchy's generated ones
+stopped setting it when the picker lost its backdrop, your background at half
+stands in. The picker's borders go on the feeds, the `[menu]` selected fill on
+the cursor row, your theme's radius on the corners, and app icons come from your
+icon theme through the launcher's own lookup. A theme that wants more can dress
+it. See [theming](#theming).
 
 ## Requirements
 
@@ -146,6 +148,7 @@ is no separate config file:
 
 ```json
 {
+  "version": 1,
   "plugins": [
     {
       "id": "io.github.ilkaydnc.panorama",
@@ -173,6 +176,13 @@ is no separate config file:
 | `doubleTap` | `300` | 100–1000 ms | Window for the double-tap of Super. |
 | `field` | `1` | 0–3 | Density of the stills field, when a theme provides one. `0` is off. |
 | `bar` | `hidden` | `hidden`, `shown` | Whether the veil covers the bar while open. |
+
+Panorama reads that file itself. The shell hands an installed plugin no copy of
+its config, so Panorama follows the shell's own rule instead: your
+`shell.json` counts when it parses and still says `"version": 1`, and
+otherwise the shell runs on Omarchy's defaults and Panorama does too. Edits land
+live, no restart. Save the file and the next open uses the new values, and a new
+`bind` moves the key at once.
 
 ## Theming
 
