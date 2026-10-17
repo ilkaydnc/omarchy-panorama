@@ -683,7 +683,7 @@ Item {
       if (name === "openwindow" || name === "closewindow" || name === "movewindow" || name === "movewindowv2"
           || name === "workspace" || name === "workspacev2" || name === "fullscreen" || name === "windowtitle"
           || name === "windowtitlev2" || name === "urgent" || name === "createworkspace" || name === "destroyworkspace"
-          || name === "changefloatingmode" || name === "focusedmon") {
+          || name === "renameworkspace" || name === "changefloatingmode" || name === "focusedmon") {
         refreshDebounce.restart()
       }
     }
