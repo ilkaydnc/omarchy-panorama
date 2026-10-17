@@ -286,8 +286,11 @@ execute methods and label bindings extracted from `Panorama.qml`, with shell,
 monitor, and timer dependencies stubbed. No packages or display server are
 needed. If `lua` is installed (or `LUA` names an interpreter), an additional
 test evaluates the generated focus command to check that workspace names
-survive Lua string parsing; without one it is skipped. This does not
-verify rendered captures or live Hyprland focus changes.
+survive Lua string parsing; without one it is skipped. With `OMARCHY_SHELL`
+set to the `shell/` directory of an Omarchy checkout, one more test checks the
+settings paths, the parse rule and the scoped plugin shell against that
+checkout; without it that test is skipped too. This does not verify rendered
+captures or live Hyprland focus changes.
 
 ## License
 
