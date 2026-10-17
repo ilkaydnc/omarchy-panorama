@@ -11,7 +11,7 @@ import vm from 'node:vm'
 // way QML re-evaluates it when `config` changes; a FileView becomes a small fake over a real temp file,
 // so "the file changed" is a write to disk followed by the watcher's fileChanged.
 
-const qml = readFileSync(new URL('../1.0.19/Panorama.qml', import.meta.url), 'utf8')
+const qml = readFileSync(new URL('../1.0.20/Panorama.qml', import.meta.url), 'utf8')
 const methods = [...qml.matchAll(/^  function \w+\([^\n]*\{(?:[^\n]*\}[^\n]*$|[\s\S]*?^  \})/gm)].map(hit => hit[0]).join('\n')
 const pluginId = 'io.github.ilkaydnc.panorama'
 const plain = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))

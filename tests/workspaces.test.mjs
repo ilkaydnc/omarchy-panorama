@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import test from 'node:test'
 import vm from 'node:vm'
 
-const qml = readFileSync(new URL('../1.0.19/Panorama.qml', import.meta.url), 'utf8')
+const qml = readFileSync(new URL('../1.0.20/Panorama.qml', import.meta.url), 'utf8')
 const methods = [...qml.matchAll(/^  function \w+\([^\n]*\{(?:[^\n]*\}[^\n]*$|[\s\S]*?^  \})/gm)].map(hit => hit[0]).join('\n')
 const plain = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value))
 const workspace = (id, name = String(id), monitor = 'DP-1') => ({ id, name, monitor })
