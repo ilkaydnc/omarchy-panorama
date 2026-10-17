@@ -186,10 +186,11 @@ test('named dispatch quotes backslashes, Unicode and every control byte for Lua'
 test('Lua round-trips the dispatched name when an interpreter is available', t => {
   const { name, lua } = quotedDispatch()
   try {
-    assert.equal(execFileSync('lua', ['-'], {
-      input: 'hl = {dsp = {focus = function(v) io.write(v.workspace) end}}\n' + lua,
+    // Bytes, not text: a text-mode stdout (Windows) would turn the name's \n into \r\n.
+    assert.equal(execFileSync(process.env.LUA || 'lua', ['-'], {
+      input: 'hl = {dsp = {focus = function(v) io.write(table.concat({v.workspace:byte(1, -1)}, ",")) end}}\n' + lua,
       encoding: 'utf8'
-    }), 'name:' + name)
+    }), [...Buffer.from('name:' + name)].join(','))
   } catch (error) {
     if (error.code !== 'ENOENT') throw error
     t.skip('lua is not installed; the exact dispatch source is checked above')

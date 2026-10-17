@@ -271,11 +271,12 @@ welcome.
 
 ## Tests
 
-Run `node --test tests/workspaces.test.mjs` with Node.js 20 or newer. The tests
+Run `node --test` from the repository root with Node.js 20 or newer. The tests
 execute methods and label bindings extracted from `Panorama.qml`, with shell,
 monitor, and timer dependencies stubbed. No packages or display server are
-needed. If `lua` is installed, an additional test evaluates the generated focus
-command to check that workspace names survive Lua string parsing. This does not
+needed. If `lua` is installed (or `LUA` names an interpreter), an additional
+test evaluates the generated focus command to check that workspace names
+survive Lua string parsing; without one it is skipped. This does not
 verify rendered captures or live Hyprland focus changes.
 
 ## License
