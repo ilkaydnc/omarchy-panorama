@@ -499,7 +499,7 @@ Item {
       if (!c || c.mapped === false || c.hidden === true) continue
       if (!c.workspace) continue
       var cw = Number(c.workspace.id)
-      if (!cw) continue
+      if (!cw || cw === -1) continue        // -1 is Hyprland's "no workspace", not a named one
       if (isSpecialWorkspace(c.workspace)) {
         var onto = above[cw]
         if (!onto) continue                 // a special workspace that isn't on screen

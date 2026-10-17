@@ -85,6 +85,14 @@ test('workspace IDs distinguish ordinary special names from renamed scratchpads'
   assert.equal(h.pendingLua, 'hl.dsp.focus({ workspace = "name:special" })')
 })
 
+test('a window on no workspace (Hyprland reports id -1) never becomes a named feed', () => {
+  const h = harness({ opening: true })
+  h.snapshot([client(-1, '', '0xa'), client(-1337, 'Code', '0xb')], [workspace(-1337, 'Code')], [monitor(-1337, 'Code')])
+  assert.deepEqual(plain(h.ids), [-1337, 1, 2, 3, 4])
+  assert.equal(h.wsMap[-1], undefined)
+  assert.equal(h.clientMap.a, undefined)
+})
+
 test('numbered strips retain contiguous slots, cap, occupied overflow and active empty overflow', () => {
   const h = harness({ maximum: 5, minimum: 3 })
   h.snapshot([client(2, '2', '0xa'), client(12, '12', '0xb')], [workspace(2), workspace(19)], [monitor(20)])
