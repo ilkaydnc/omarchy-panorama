@@ -100,7 +100,20 @@ test('mixed strips keep named feeds and numbered destinations without exceeding 
   h.snapshot([], Array.from({ length: 6 }, (_, i) => workspace(-1337 - i, 'Name' + i)), [monitor(-1337, 'Name0')])
   assert.deepEqual(plain(h.ids), [-1337, -1338, -1339, -1340, -1341, -1342])
   h.snapshot([client(12, '12', '0xa')], [workspace(-1337, 'Code')], [monitor(-1337, 'Code')])
-  assert.deepEqual(plain(h.ids), [-1337, 1, 2, 12, 3])
+  assert.deepEqual(plain(h.ids), [-1337, 1, 2, 3, 12])
+})
+
+test('mixed strips keep numbered slots ascending when the cap leaves no trailing empty slot', () => {
+  const h = harness({ maximum: 10, minimum: 5 })
+  const named = [workspace(-1337, 'Web'), workspace(-1338, 'Code'), workspace(-1339, 'Chat')]
+  const busy = [1, 2, 3, 5, 6, 7]
+  h.snapshot(busy.map(id => client(id, String(id), '0x' + id)), named.concat(busy.map(id => workspace(id))), [monitor(7)])
+  assert.deepEqual(plain(h.ids), [-1337, -1338, -1339, 1, 2, 3, 4, 5, 6, 7])
+  h.snapshot([client(1, '1', '0x1'), client(5, '5', '0x5')], named.slice(0, 2).concat(workspace(1), workspace(5)), [monitor(1)])
+  assert.deepEqual(plain(h.ids), [-1337, -1338, 1, 2, 3, 4, 5, 6])
+  const capped = harness({ maximum: 5, minimum: 3 })
+  capped.snapshot([client(1, '1', '0x1'), client(5, '5', '0x5')], named.slice(0, 2).concat(workspace(1), workspace(5)), [monitor(1)])
+  assert.deepEqual(plain(capped.ids), [-1337, -1338, 1, 2, 5])
 })
 
 test('refresh keeps feed identity and named selection while updating window titles', () => {

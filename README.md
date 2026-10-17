@@ -108,11 +108,11 @@ Arriving there creates nothing. Hyprland makes it real when you cut into it,
 the same way `SUPER+1..9` does.
 
 Named workspaces appear first in creation order, including empty persistent
-workspaces, and count toward `minimum`. Numbered slots fill the remaining room,
-with an empty destination at the end when possible. Real named workspaces,
+workspaces, and count toward `minimum` and `maximum`. Numbered slots fill the
+remaining room, always in ascending order, and end on an empty destination
+only when the cap leaves room for one. Real named workspaces,
 occupied numbered workspaces, and each monitor's active workspace stay visible
-even beyond `maximum`. On a numbered-only desktop, the strip keeps its
-contiguous numeric order. Names appear on feeds and receipts. Digit keys still
+even beyond `maximum`. Names appear on feeds and receipts. Digit keys still
 select numbered workspace IDs.
 
 ## The zoom

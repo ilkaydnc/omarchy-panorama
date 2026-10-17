@@ -529,6 +529,9 @@ Item {
     for (var wk in byWs) highest = Math.max(highest, Number(wk))
     for (var wi = 0; wi < workspaces.length; wi++) if (workspaces[wi].id > 0 && workspaces[wi].id <= maximum) highest = Math.max(highest, workspaces[wi].id)
     var hi = Math.max(minimum, Math.min(maximum, highest + 1))
+    // Named workspaces (negative ids, a newer one always lower) lead the strip in creation order and take
+    // their share of `minimum` and `maximum`. The numbered run shrinks to make room for them and for any
+    // occupied or on-screen workspace past it, so its trailing empty slot appears only when the cap has room.
     var named = [], required = ({})
     for (var ki in known) if (Number(ki) < 0 && !isSpecialWorkspace(known[ki])) named.push(Number(ki))
     named.sort(function(a, b) { return b - a })
@@ -557,12 +560,8 @@ Item {
       if (aw > hi && extra.indexOf(aw) === -1) extra.push(aw)
     }
     extra.sort(function(a, b) { return a - b })
+    // Numbers stay in ascending order after the named feeds, even when the cap leaves no empty slot to end on.
     list = named.concat(list, extra)
-    if (named.length && list.length && byWs[list[list.length - 1]]) {
-      for (var empty = list.length - 1; empty >= named.length; empty--) {
-        if (!byWs[list[empty]]) { list.push(list.splice(empty, 1)[0]); break }
-      }
-    }
 
     var map = ({})
     for (var li = 0; li < list.length; li++) {
