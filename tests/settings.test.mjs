@@ -377,3 +377,20 @@ test('paths, parse rule and the scoped shell match the Omarchy shell named by OM
   assert.match(shellQml, /function pluginShellFor\(manifest\) \{\n\s*if \(!manifest \|\| manifest\.__isFirstParty\) return shell/)
   assert.doesNotMatch(api, /property [\w<>]+ shellConfig\b/, 'the scoped shell still has no shellConfig to read')
 })
+
+
+test('workspaceOrder uses the watched plugin entry and defaults malformed values to an empty list', t => {
+  const r = rig({ user: shellJson({ workspaceOrder: ['name:Code', 'name:Web'] }) })
+  t.after(r.cleanup)
+  const get = vm.runInContext(binding('workspaceOrder'), r.ctx)
+  Object.defineProperty(r.ctx, 'workspaceOrder', { get: () => get.call(r.ctx) })
+  assert.deepEqual(plain(r.ctx.workspaceOrder), ['name:Code', 'name:Web'])
+  r.edit('user', shellJson({ workspaceOrder: ['name:Web'] }))
+  assert.deepEqual(plain(r.ctx.workspaceOrder), ['name:Web'])
+  for (const value of [null, {}, 'name:Code', 2, false]) {
+    r.edit('user', shellJson({ workspaceOrder: value }))
+    assert.deepEqual(plain(r.ctx.workspaceOrder), [])
+  }
+  r.edit('user', shellJson({}))
+  assert.deepEqual(plain(r.ctx.workspaceOrder), [])
+})
