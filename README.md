@@ -109,8 +109,12 @@ The strip includes an empty numbered destination when `maximum` leaves room.
 Arriving there creates nothing. Hyprland makes it real when you cut into it,
 the same way `SUPER+1..9` does.
 
-Named workspaces appear first in creation order, including empty persistent
-workspaces, and count toward `minimum` and `maximum`. Numbered slots fill the
+Named workspaces appear first, including empty persistent workspaces, and count
+toward `minimum` and `maximum`. By default they follow creation order. Set
+`workspaceOrder` to list exact named selectors in your bar or shortcut order.
+Listed workspaces come first, followed by unlisted names in creation order.
+Duplicates, invalid selectors, and names that do not exist are ignored.
+The setting never creates or hides a workspace. Numbered slots fill the
 remaining room, always in ascending order, and end on an empty destination
 only when the cap leaves room for one. Real named workspaces,
 occupied numbered workspaces, and each monitor's active workspace stay visible
@@ -125,7 +129,8 @@ chrome fades in. Enter zooms in. The chosen feed grows back to the full screen,
 Panorama tells Hyprland to switch underneath, and the overlay disappears on a
 frame that matches the real desktop. Every frame recomputes the mapping from the
 selected feed as drawn, mid-pan and mid-scale, so interrupting a pan with Enter
-still lands exactly.
+still lands exactly. Choosing a workspace or window on another monitor cuts
+directly to that monitor without a zoom.
 
 All of it runs on the compositor's frame callbacks, snapped to the monitor's
 frame period. A 240 Hz panel gets 240 distinct steps a second, and 340 ms means
@@ -154,7 +159,8 @@ is no separate config file:
       "id": "io.github.ilkaydnc.panorama",
       "zoom": 340,
       "feed": 30,
-      "thumbnails": "live"
+      "thumbnails": "live",
+      "workspaceOrder": ["name:browser", "name:code", "name:chat"]
     }
   ]
 }
@@ -171,6 +177,7 @@ is no separate config file:
 | `thumbnails` | `live` | `live`, `static`, `off` | Live captures, one frame each, or none. |
 | `minimum` | `5` | 1–10 | Fewest workspaces the strip shows. |
 | `maximum` | `10` | 1–20 | Most it shows. The trailing empty slot lives inside this cap. |
+| `workspaceOrder` | `[]` | array of exact `name:` selectors | Named workspace order, with case-sensitive names. Unlisted names keep creation order. |
 | `icons` | `8` | 1–12 | Window rows visible at once. |
 | `rows` | `4` | 1–8 | Rows listed by the `record` dress. |
 | `doubleTap` | `300` | 100–1000 ms | Window for the double-tap of Super. |
@@ -182,7 +189,8 @@ its config, so Panorama follows the shell's own rule instead: your
 `shell.json` counts when it parses and still says `"version": 1`, and
 otherwise the shell runs on Omarchy's defaults and Panorama does too. Edits land
 live, no restart. Save the file and the next open uses the new values, and a new
-`bind` moves the key at once.
+`bind` moves the key at once. Changes to `workspaceOrder` also update an open
+strip while preserving the selected workspace.
 
 ## Theming
 

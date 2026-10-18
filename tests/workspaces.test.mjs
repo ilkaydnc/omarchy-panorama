@@ -216,10 +216,32 @@ function surfaceState(h) {
   h.root = h
   h.WlrLayer = { Bottom: 1, Overlay: 3 }
   h.win = {}
+  h.mainFrame = { submitted: true }
+  h.veilFrame = { submitted: true }
   const active = qml.match(/^    readonly property bool active: (.+)$/m)[1]
   Object.defineProperty(h.win, 'active', { get: () => vm.runInContext(active, h) })
   return () => layers.map(expr => vm.runInContext(expr, h))
 }
+
+test('each native surface starts Bottom until its own first buffer and rearms on replacement', () => {
+  const h = harness({ opening: true })
+  const layer = surfaceState(h)
+  const frameType = qml.match(/  component SurfaceFrame: Item \{([\s\S]*?)^  \}/m)
+  assert.ok(frameType)
+  const reset = frameType[1].match(/onNativeWindowChanged: ([^\n]+)/)[1]
+  const submit = frameType[1].match(/function onFrameSwapped\(\) \{ ([^}]+) \}/)[1]
+  for (const frame of [h.mainFrame, h.veilFrame]) vm.runInNewContext(reset, frame)
+  assert.deepEqual(layer(), [1, 1])
+  vm.runInNewContext(submit, { surfaceFrame: h.mainFrame })
+  assert.deepEqual(layer(), [3, 1])
+  vm.runInNewContext(submit, { surfaceFrame: h.veilFrame })
+  assert.deepEqual(layer(), [3, 3])
+  vm.runInNewContext(reset, h.mainFrame)
+  assert.deepEqual(layer(), [1, 3])
+  h.opening = false
+  vm.runInNewContext(submit, { surfaceFrame: h.mainFrame })
+  assert.deepEqual(layer(), [1, 1], 'a cancelled opening stays Bottom after submission')
+})
 
 test('opening promotes both layer bindings before screen assignment and never dips before open', () => {
   const h = harness({ opening: true })
