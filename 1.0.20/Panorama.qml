@@ -31,8 +31,8 @@ import qs.Commons as Commons
 // perfect scaled copy and the landing is exact even when Enter interrupts a pan. `zoom` ms (340;
 // 0 = cut), `zoomEase` [x1,y1,x2,y2].
 //
-// The layer surface is never unmapped and never resized: Hyprland fades layer surfaces in/out on
-// map/unmap and tweens a mapped surface's geometry change — either would blend or squeeze the copy.
+// QML keeps the layer visible and full-sized: Hyprland fades surfaces on map/unmap
+// and tweens geometry changes. Quickshell may still replace the native window when its output changes.
 // So the surface is always the full desktop area (the bar keeps its strip): idle, it is fully
 // transparent, input-masked and on the Bottom layer (which never blocks direct scanout); open, it
 // switches to the Overlay layer — a layer change alone warps.
@@ -196,6 +196,8 @@ Item {
   readonly property string thumbnails: String(setting("thumbnails", "live"))   // live | static | off
   readonly property int minimum: clampInt(setting("minimum", 5), 1, 10, 5)
   readonly property int maximum: clampInt(setting("maximum", 10), 1, 20, 10)
+  readonly property var workspaceOrder: { var v = setting("workspaceOrder", []); return Array.isArray(v) ? v : [] }
+  onWorkspaceOrderChanged: if ((open || opening) && !committing) refresh()
   readonly property int maxRows: clampInt(setting("rows", 4), 1, 8, 4)          // record: rows listed
   readonly property int maxIcons: clampInt(setting("icons", 8), 1, 12, 8)       // dock: rows shown
   property real fieldDensity: { var v = Number(setting("field", 1)); return isFinite(v) ? Math.max(0, Math.min(3, v)) : 1 }   // user scale for the stills field, 0 = off
@@ -518,6 +520,7 @@ Item {
   function refresh() { if (snap.running) refreshQueued = true; else snap.running = true }
 
   function applySnapshot(text) {
+    if (committing) return
     var parts = String(text).split("\n---\n")
     var clients = [], workspaces = [], mons = []
     try {
@@ -594,12 +597,20 @@ Item {
     for (var wk in byWs) highest = Math.max(highest, Number(wk))
     for (var wi = 0; wi < workspaces.length; wi++) if (workspaces[wi].id > 0 && workspaces[wi].id <= maximum) highest = Math.max(highest, workspaces[wi].id)
     var hi = Math.max(minimum, Math.min(maximum, highest + 1))
-    // Named workspaces (negative ids, a newer one always lower) lead the strip in creation order and take
+    // Named workspaces (negative ids, a newer one always lower) lead in configured or creation order and take
     // their share of `minimum` and `maximum`. The numbered run shrinks to make room for them and for any
     // occupied or on-screen workspace past it, so its trailing empty slot appears only when the cap has room.
     var named = [], required = ({})
     for (var ki in known) if (Number(ki) < 0 && !isSpecialWorkspace(known[ki])) named.push(Number(ki))
-    named.sort(function(a, b) { return b - a })
+    var order = ({})
+    for (var oi = 0; oi < workspaceOrder.length; oi++) {
+      var selector = workspaceOrder[oi]
+      if (typeof selector === "string" && selector.indexOf("name:") === 0 && selector.length > 5 && order[selector] === undefined) order[selector] = oi
+    }
+    named.sort(function(a, b) {
+      var ar = order["name:" + known[a].name], br = order["name:" + known[b].name]
+      return (ar === undefined ? workspaceOrder.length : ar) - (br === undefined ? workspaceOrder.length : br) || b - a
+    })
     if (named.length) {
       for (var rk in byWs) if (Number(rk) > 0) required[rk] = true
       for (var rm = 0; rm < mons.length; rm++) {
@@ -667,7 +678,6 @@ Item {
     wsMap = map
 
     if (opening) {
-      opening = false
       var active = monitor && monitor.activeWorkspace ? Number(monitor.activeWorkspace.id) : 1
       sel = ids.indexOf(active) !== -1 ? active : (ids.length ? ids[0] : 1)
       gatherAgain()                  // also when sel was already the workspace on screen: an open gathers
@@ -683,6 +693,7 @@ Item {
       revealed = false
       selPos = selIndex
       open = true
+      opening = false
       if (pendingQuery) { setQuery(pendingQuery); pendingQuery = "" }
       revealTries = 0
       revealTimer.restart()
@@ -1169,10 +1180,9 @@ Item {
     cardSub = "→ " + workspaceLabel(wsId) + " · " + what + (ws && ws.monitorName ? " · " + ws.monitorName : (monitor ? " · " + monitor.name : ""))
     locked = true
     committing = true            // drops the layer's exclusive keyboard focus right now
-    // Only zoom out of a frame that is already a copy: before the reveal the captures have no pixels, so
-    // blowing the feed up would hold a screenful of bare plates for the whole zoom. Cut instead.
-    var zoomIt = zoomMs > 0 && revealed
-    revealed = zoomIt
+    revealTimer.stop()
+    var zoomLocally = zoomMs > 0 && revealed && !(ws && ws.elsewhere)
+    revealed = zoomLocally
     pendingAddr = addr ? String(addr) : ""
     if (ws && wsId !== sel) { sel = wsId; rowIdx = -1 }   // digit keys and feed clicks: the reticle pans there inside the zoom
     pendingLua = client
@@ -1180,11 +1190,12 @@ Item {
       : "hl.dsp.focus({ workspace = " + luaString(ws ? ws.selector : String(wsId)) + " })"
     dispatchTimer.interval = dispatchDelayMs
     dispatchTimer.restart()
-    if (zoomIt) startZoom(0)
+    if (zoomLocally) startZoom(0)
+    else stopZoom()
     // The zoom's landing frame hides the overlay (frameTick); the timer is the fallback for a window that gets no frames.
     // A cut has nothing to wait for: the stage is still at its pre-reveal 0.4 %, so holding the surface
     // for a zoom's worth of time would only keep an invisible overlay over the desktop.
-    hideTimer.interval = zoomIt ? zoomMs + 250 : dispatchDelayMs + 20
+    hideTimer.interval = zoomLocally ? zoomMs + 250 : dispatchDelayMs + 20
     hideTimer.restart()
   }
   Timer { id: dispatchTimer; onTriggered: { if (root.pendingLua) root.dispatch(root.pendingLua); root.pendingLua = "" } }
@@ -1199,6 +1210,7 @@ Item {
     var wasCancel = cancelling
     cancelling = false
     if (cardMs > 0 && !wasCancel) {
+      revealed = true
       cardShowing = true
       cardTimer.interval = cardMs
       cardTimer.restart()
@@ -1241,13 +1253,13 @@ Item {
   function maybeReveal() { if (open && !revealed && stageReady() && geometryReady() && selectedReady()) reveal() }
   // Reveal cap: captures may never report; geometry gets three more waits before giving up on it.
   function revealCap() {
-    if (!open || revealed) return
+    if (!open || revealed || committing) return
     if (!geometryReady() && revealTries < 3) { revealTries++; revealTimer.restart(); return }
     reveal()
   }
   function reveal() {
     revealTimer.stop()
-    if (!open || revealed) return
+    if (!open || revealed || committing) return
     revealed = true
     if (zoomMs > 0 && zoomProgress < 1) startZoom(1)
     else zoomProgress = 1
@@ -1368,14 +1380,27 @@ Item {
   readonly property var stageItem: content.item
   readonly property var veilItem: veilStage
 
+  // Hyprland can lose a layer change before the first buffer. Promote after
+  // submission and reset when Quickshell replaces the native window.
+  component SurfaceFrame: Item {
+    id: surfaceFrame
+    property bool submitted: false
+    readonly property var nativeWindow: Window.window
+    onNativeWindowChanged: submitted = false
+    Connections {
+      target: surfaceFrame.nativeWindow
+      function onFrameSwapped() { surfaceFrame.submitted = true }
+    }
+  }
+
   PanelWindow {
     id: win
     readonly property bool active: root.open || root.cardShowing
-    visible: true                       // never unmapped, never resized (see header)
+    visible: true
     screen: root.screen
     color: "transparent"
     WlrLayershell.namespace: "panorama"
-    WlrLayershell.layer: root.compact || !win.active ? WlrLayer.Bottom : WlrLayer.Overlay
+    WlrLayershell.layer: root.compact || !mainFrame.submitted || !(root.opening || win.active) ? WlrLayer.Bottom : WlrLayer.Overlay
     WlrLayershell.keyboardFocus: root.open && !root.committing && !root.compact ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
     // Always the desktop area (the bar keeps its strip); idle it is transparent and input-masked.
@@ -1391,6 +1416,7 @@ Item {
     implicitHeight: root.compact ? root.compactH : 1
     mask: root.compact || !win.active ? emptyRegion : null
 
+    SurfaceFrame { id: mainFrame }
     Region { id: emptyRegion }
 
     Loader {
@@ -1411,7 +1437,7 @@ Item {
     screen: root.screen
     color: "transparent"
     WlrLayershell.namespace: "panorama-veil"
-    WlrLayershell.layer: root.compact || !win.active ? WlrLayer.Bottom : WlrLayer.Overlay
+    WlrLayershell.layer: root.compact || !veilFrame.submitted || !(root.opening || win.active) ? WlrLayer.Bottom : WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
     anchors { top: !root.compact; left: !root.compact; bottom: true; right: true }
@@ -1419,6 +1445,7 @@ Item {
     implicitHeight: root.compact ? root.compactH : 1
     // Input on the bands alone while open (the bar underneath must not take the click), none idle.
     mask: !root.compact && win.active && root.barHidden ? bands : veilIdle
+    SurfaceFrame { id: veilFrame }
     Region { id: veilIdle }
     Region {
       id: bands
